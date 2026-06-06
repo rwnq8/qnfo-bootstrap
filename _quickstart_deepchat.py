@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-_quickstart_deepchat.py v2.0 — FULL DeepChat restoration from R2.
+_quickstart_deepchat.py v2.2 — FULL DeepChat restoration from R2.
 
 Usage:
     python _quickstart_deepchat.py [--dry-run]
@@ -310,16 +310,74 @@ def restore_skills(dry_run=False):
     
     return results
 
+# =====================================================================
+# VERSION DRIFT CHECK (v2.2)
+# =====================================================================
+
+def check_drift(prompt_name='DEFAULT', prompt_path='prompts/DEFAULT.md', app_path=None):
+    """Pull R2 canonical version, compare with local. Returns report dict."""
+    import re
+    if app_path is None:
+        app_path = DEEPCHAT_DIR / 'app-settings.json'
+    local_ver = None
+    if Path(app_path).exists():
+        with open(app_path, encoding='utf-8') as f:
+            app = json.load(f)
+        prompt = app.get('defaultSystemPrompt', '')
+        m = re.search(r'v(\d+\.\d+)', prompt[:500])
+        local_ver = m.group(1) if m else None
+    r2_ver = None
+    tmp = Path('_tmp_drift.md')
+    ok, _ = run(
+        f'npx wrangler r2 object get qnfo/{prompt_path} --remote --file={tmp}',
+        f'Pull {prompt_name} version'
+    )
+    if ok and tmp.exists():
+        with open(tmp, encoding='utf-8') as f:
+            text = f.read()
+        m = re.search(r'v(\d+\.\d+)', text[:500])
+        r2_ver = m.group(1) if m else None
+        tmp.unlink(missing_ok=True)
+    report = {'prompt': prompt_name, 'local_version': local_ver, 'r2_version': r2_ver,
+              'drift': local_ver != r2_ver if (local_ver and r2_ver) else None,
+              'severity': 'ok', 'message': ''}
+    if not local_ver:
+        report.update(severity='error', message=f'{prompt_name}: cannot read local version')
+    elif not r2_ver:
+        report.update(severity='error', message=f'{prompt_name}: cannot read R2 version')
+    elif local_ver != r2_ver:
+        try:
+            diff = abs(float(r2_ver) - float(local_ver))
+        except ValueError:
+            diff = 0
+        if diff >= 1.0:
+            report.update(severity='BLOCKING', drift=True,
+                message=f'{prompt_name} v{local_ver} is {diff:.1f} versions behind R2 v{r2_ver}')
+        elif diff >= 0.5:
+            report.update(severity='warning', drift=True,
+                message=f'{prompt_name} v{local_ver} behind R2 v{r2_ver}')
+        else:
+            report.update(severity='info', drift=True,
+                message=f'{prompt_name} v{local_ver} slightly behind R2 v{r2_ver}')
+    else:
+        report['message'] = f'{prompt_name} v{local_ver} matches R2 canonical v{r2_ver}'
+    return report
+
+def check_all_drifts():
+    """Check DEFAULT.md for version drift. Returns list of reports."""
+    return [check_drift('DEFAULT', 'prompts/DEFAULT.md')]
+
 # === MAIN ===
 def main():
     parser = argparse.ArgumentParser(
-        description="DeepChat Quickstart — Full R2 Recovery (v2.1)"
+        description="DeepChat Quickstart — Full R2 Recovery (v2.2)"
     )
     parser.add_argument("--dry-run", action="store_true", help="Show what would be restored")
     parser.add_argument("--prompts-only", action="store_true", help="Only restore prompts")
     parser.add_argument("--configs-only", action="store_true", help="Only restore configs")
     parser.add_argument("--skills-only", action="store_true", help="Only restore skills")
-    parser.add_argument("--app-settings-only", action="store_true", help="Only update app-settings.json (master config)")
+    parser.add_argument("--app-settings-only", action="store_true", help="Only update app-settings.json")
+    parser.add_argument("--check-drift", action="store_true", help="Check version drift local vs R2 canonical")
     parser.add_argument("--backup-now", action="store_true", 
                        help="Backup current DeepChat settings to R2 (save state)")
     args = parser.parse_args()
@@ -327,7 +385,7 @@ def main():
     do_all = not (args.prompts_only or args.configs_only or args.skills_only or args.app_settings_only)
     
     print("=" * 60)
-    print("DEEPCHAT QUICKSTART v2.1 — R2 Recovery")
+    print("DEEPCHAT QUICKSTART v2.2 — R2 Recovery")
     print("=" * 60)
     print(f"Mode: {'DRY RUN' if args.dry_run else 'LIVE'} {'BACKUP NOW' if args.backup_now else ''}")
     print(f"Canonical source: R2 bucket '{R2_BUCKET}'")
@@ -366,6 +424,25 @@ def main():
                     print(f"  FAILED: {fname} (wrangler upload error)")
             else:
                 print(f"  SKIP: {fname} (does not exist locally)")
+    
+    if args.check_drift:
+        print("\n" + "=" * 60)
+        print("VERSION DRIFT CHECK")
+        print("=" * 60)
+        results = check_all_drifts()
+        for r in results:
+            icon_map = {'ok': 'OK', 'info': 'INFO', 'warning': 'WARN', 'error': 'ERR', 'BLOCKING': 'BLOCK'}
+            icon = icon_map.get(r['severity'], '?')
+            print(f"  [{icon}] {r['message']}")
+        blocking = any(r['severity'] == 'BLOCKING' for r in results)
+        if blocking:
+            print("\n  BLOCKING DRIFT! Run: python _quickstart_deepchat.py --app-settings-only")
+        elif any(r['severity'] == 'warning' for r in results):
+            print("\n  Drift detected. Run: python _quickstart_deepchat.py --app-settings-only")
+        else:
+            print("\n  All prompts current. No drift.")
+        print("=" * 60)
+        sys.exit(0 if not blocking else 1)
     
     # --- Restore ---
     if args.prompts_only or do_all:
