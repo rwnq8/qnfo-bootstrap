@@ -164,6 +164,106 @@ def restore_configs(dry_run=False):
     
     return results
 
+# === RESTORE APP SETTINGS ===
+def restore_app_settings(dry_run=False):
+    """Update app-settings.json with latest R2 canonical prompts.
+
+    This is the MOST IMPORTANT step — DeepChat reads app-settings.json
+    as its master config file. Without this, restored templates may not
+    appear in the DeepChat UI.
+    """
+    print("\n" + "=" * 60)
+    print("RESTORE: App Settings (Master Config)")
+    print("=" * 60)
+
+    ap_path = DEEPCHAT_DIR / 'app-settings.json'
+    if not ap_path.exists():
+        print("  WARN: app-settings.json not found (fresh install?)")
+        return {"app-settings": "SKIPPED (not found)"}
+
+    # Pull latest DEFAULT.md from R2
+    default_tmp = Path("_tmp_default_latest.md")
+    if not r2_pull("prompts/DEFAULT.md", str(default_tmp), "Pull latest DEFAULT.md"):
+        print("  WARN: Cannot pull DEFAULT.md from R2")
+        return {"app-settings": "SKIPPED (no DEFAULT.md on R2)"}
+
+    with open(default_tmp, encoding='utf-8') as f:
+        latest_default = f.read()
+
+    # Pull prompts_bare.json from R2 for template sync
+    prompts_tmp = Path("_tmp_prompts_bare.json")
+    if not r2_pull("prompts/prompts_bare.json", str(prompts_tmp), "Pull prompts manifest"):
+        return {"app-settings": "SKIPPED (no prompts_bare.json on R2)"}
+
+    with open(prompts_tmp, encoding='utf-8') as f:
+        all_entries = json.load(f)
+
+    # Read current app-settings
+    with open(ap_path, encoding='utf-8') as f:
+        app = json.load(f)
+
+    results = {}
+    import re
+
+    # 1. Update defaultSystemPrompt (the active agent prompt)
+    old_ver = '?'
+    if app.get('defaultSystemPrompt'):
+        m = re.search(r'v(\d+\.\d+)', app['defaultSystemPrompt'][:500])
+        if m: old_ver = m.group(1)
+
+    new_ver = '?'
+    m = re.search(r'v(\d+\.\d+)', latest_default[:500])
+    if m: new_ver = m.group(1)
+
+    if dry_run:
+        print(f"  [DRY RUN] Would update defaultSystemPrompt: v{old_ver} -> v{new_ver}")
+        results['defaultSystemPrompt'] = f"WOULD_UPDATE v{old_ver}->v{new_ver}"
+    else:
+        app['defaultSystemPrompt'] = latest_default
+        print(f"  UPDATED: defaultSystemPrompt v{old_ver} -> v{new_ver}")
+        results['defaultSystemPrompt'] = f"UPDATED v{old_ver}->v{new_ver}"
+
+    # 2. Remove stale default_system_prompt (old format, adds bloat)
+    if 'default_system_prompt' in app:
+        stale_ver = '?'
+        m = re.search(r'v(\d+\.\d+)', app['default_system_prompt'][:500])
+        if m: stale_ver = m.group(1)
+        if dry_run:
+            print(f"  [DRY RUN] Would remove stale default_system_prompt v{stale_ver}")
+        else:
+            del app['default_system_prompt']
+            print(f"  REMOVED: stale default_system_prompt v{stale_ver}")
+        results['stale_removed'] = f"v{stale_ver}"
+    else:
+        print("  Already clean: no stale default_system_prompt")
+
+    # 3. Sync promptTemplates with R2 canonical
+    agent_names = {'PROJECTS-AGENT', 'PROMPTS-AGENT', 'QWAV-AGENT',
+                   'EXPLORER-SUBAGENT', 'IMPLEMENTER-SUBAGENT', 'REVIEWER-SUBAGENT'}
+    current_count = len(app.get('promptTemplates', []))
+    # Merge: system prompts + templates
+    all_prompts = all_entries  # Already includes both types
+
+    if dry_run:
+        print(f"  [DRY RUN] Would sync promptTemplates: {current_count} -> {len(all_prompts)} entries")
+    else:
+        app['promptTemplates'] = all_prompts
+        print(f"  SYNCED: promptTemplates {current_count} -> {len(all_prompts)} entries")
+    results['promptTemplates'] = f"{current_count}->{len(all_prompts)}"
+
+    # 4. Save
+    if not dry_run:
+        backup_existing(ap_path)
+        with open(ap_path, 'w', encoding='utf-8') as f:
+            json.dump(app, f, indent=2, ensure_ascii=False)
+        print(f"  SAVED: app-settings.json ({len(json.dumps(app)):,} bytes)")
+
+    # Cleanup
+    default_tmp.unlink(missing_ok=True)
+    prompts_tmp.unlink(missing_ok=True)
+
+    return results
+
 # === RESTORE SKILLS ===
 SKILL_MANIFEST = [
     "bling-usability-audit", "closeout-manager", "cloudflare-deployer",
@@ -213,20 +313,21 @@ def restore_skills(dry_run=False):
 # === MAIN ===
 def main():
     parser = argparse.ArgumentParser(
-        description="DeepChat Quickstart — Full R2 Recovery (v2.0)"
+        description="DeepChat Quickstart — Full R2 Recovery (v2.1)"
     )
     parser.add_argument("--dry-run", action="store_true", help="Show what would be restored")
     parser.add_argument("--prompts-only", action="store_true", help="Only restore prompts")
     parser.add_argument("--configs-only", action="store_true", help="Only restore configs")
     parser.add_argument("--skills-only", action="store_true", help="Only restore skills")
+    parser.add_argument("--app-settings-only", action="store_true", help="Only update app-settings.json (master config)")
     parser.add_argument("--backup-now", action="store_true", 
                        help="Backup current DeepChat settings to R2 (save state)")
     args = parser.parse_args()
     
-    do_all = not (args.prompts_only or args.configs_only or args.skills_only)
+    do_all = not (args.prompts_only or args.configs_only or args.skills_only or args.app_settings_only)
     
     print("=" * 60)
-    print("DEEPCHAT QUICKSTART v2.0 — R2 Recovery")
+    print("DEEPCHAT QUICKSTART v2.1 — R2 Recovery")
     print("=" * 60)
     print(f"Mode: {'DRY RUN' if args.dry_run else 'LIVE'} {'BACKUP NOW' if args.backup_now else ''}")
     print(f"Canonical source: R2 bucket '{R2_BUCKET}'")
@@ -275,6 +376,9 @@ def main():
     
     if args.skills_only or do_all:
         restore_skills(dry_run=args.dry_run)
+    
+    if args.app_settings_only or do_all:
+        restore_app_settings(dry_run=args.dry_run)
     
     # --- Done ---
     print("\n" + "=" * 60)
