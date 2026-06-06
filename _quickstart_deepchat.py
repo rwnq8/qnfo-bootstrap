@@ -365,12 +365,12 @@ def check_drift(prompt_name='DEFAULT', prompt_path='prompts/DEFAULT.md', app_pat
 
 def check_all_drifts():
     """Check DEFAULT.md for version drift. Returns list of reports."""
-    return [check_drift('DEFAULT', 'prompts/DEFAULT.md')]
+    return [check_drift('DEFAULT', 'prompts/DEFAULT.md'), check_drift('QWAV', 'prompts/QWAV-DEFAULT.md')]
 
 # === MAIN ===
 def main():
     parser = argparse.ArgumentParser(
-        description="DeepChat Quickstart — Full R2 Recovery (v2.2)"
+        description="DeepChat Quickstart — Full R2 Recovery (v2.3)"
     )
     parser.add_argument("--dry-run", action="store_true", help="Show what would be restored")
     parser.add_argument("--prompts-only", action="store_true", help="Only restore prompts")
@@ -385,7 +385,7 @@ def main():
     do_all = not (args.prompts_only or args.configs_only or args.skills_only or args.app_settings_only)
     
     print("=" * 60)
-    print("DEEPCHAT QUICKSTART v2.2 — R2 Recovery")
+    print("DEEPCHAT QUICKSTART v2.3 — R2 Recovery")
     print("=" * 60)
     print(f"Mode: {'DRY RUN' if args.dry_run else 'LIVE'} {'BACKUP NOW' if args.backup_now else ''}")
     print(f"Canonical source: R2 bucket '{R2_BUCKET}'")
