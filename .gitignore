@@ -1,5 +1,4 @@
-# Ignore ephemeral files
-_*.py
+# Ignore ephemeral cache files only
 _tmp_*
 __pycache__/
 *.pyc

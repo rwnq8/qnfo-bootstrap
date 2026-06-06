@@ -1,0 +1,292 @@
+#!/usr/bin/env python3
+"""
+_quickstart_deepchat.py v2.0 — FULL DeepChat restoration from R2.
+
+Usage:
+    python _quickstart_deepchat.py [--dry-run]
+    python _quickstart_deepchat.py --prompts-only
+    python _quickstart_deepchat.py --configs-only
+    python _quickstart_deepchat.py --skills-only
+
+PREREQUISITES (one-time):
+    1. Node.js installed (https://nodejs.org)
+    2. Cloudflare API token set: setx CLOUDFLARE_API_TOKEN "your-token"
+       (Token needs R2 Read access on the 'qnfo' bucket)
+
+RESTORES:
+    - custom_prompts.json (21 prompt templates)
+    - system_prompts.json (6 agent system prompts)
+    - model-config.json (4 DeepSeek model configurations)
+    - mcp-settings.json (13 MCP servers)
+    - acp_agents.json (agent configuration)
+    - knowledge-configs.json (knowledge base configs)
+    - ALL skills (from qnfo/prompts/skills/ to %USERPROFILE%/.deepchat/skills/)
+
+CANONICAL SOURCE: Cloudflare R2 bucket 'qnfo', prefix 'qnfo/'
+TARGET: %APPDATA%/DeepChat/ (or %USERPROFILE%/.deepchat/ for skills)
+
+This script is IDEMPOTENT — safe to run multiple times.
+"""
+import json, os, subprocess, sys, shutil, argparse
+from pathlib import Path
+
+R2_BUCKET = "qnfo"
+
+# === DETECT DEEPCHAT DIRECTORIES ===
+SKILLS_DIR = Path.home() / ".deepchat" / "skills"
+if not SKILLS_DIR.parent.exists():
+    APPDATA = Path(os.environ.get("APPDATA", os.path.expandvars(r"%APPDATA%")))
+    DEEPCHAT_DIR = APPDATA / "DeepChat"
+else:
+    DEEPCHAT_DIR = Path.home() / ".deepchat"
+    # But custom_prompts.json is in AppData
+    APPDATA = Path(os.environ.get("APPDATA", os.path.expandvars(r"%APPDATA%")))
+    DEEPCHAT_DIR = APPDATA / "DeepChat"
+
+SKILLS_DIR = Path.home() / ".deepchat" / "skills"
+
+# === HELPERS ===
+def run(cmd, desc=""):
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
+        ok = r.returncode == 0
+        if not ok:
+            print(f"  FAIL: {desc}: {r.stderr.strip()[:200]}")
+        return ok, r.stdout.strip()
+    except Exception as e:
+        print(f"  ERROR: {desc}: {e}")
+        return False, ""
+
+def r2_pull(remote_path, local_path, desc=""):
+    """Pull a file from R2."""
+    ok, _ = run(
+        f'npx wrangler r2 object get {R2_BUCKET}/{remote_path} --remote --file="{local_path}"',
+        desc or f"Pull {remote_path}"
+    )
+    return ok and Path(local_path).exists()
+
+def backup_existing(filepath):
+    """Backup an existing file before overwriting."""
+    if filepath.exists():
+        bak = Path(str(filepath) + ".bak")
+        shutil.copy2(filepath, bak)
+        return True
+    return False
+
+def r2_upload(local_path, remote_path):
+    """Upload a file to R2."""
+    ok, _ = run(
+        f'npx wrangler r2 object put {R2_BUCKET}/{remote_path} --file="{local_path}" --remote',
+        f"Upload {remote_path}"
+    )
+    return ok
+
+# === RESTORE PROMPTS ===
+def restore_prompts(dry_run=False):
+    """Restore prompt templates and system prompts from R2."""
+    print("\n" + "=" * 60)
+    print("RESTORE: Prompt Templates & System Prompts")
+    print("=" * 60)
+    
+    local = Path("_tmp_prompts_bare.json")
+    if not r2_pull("prompts/prompts_bare.json", str(local), "Pull prompts manifest"):
+        print("CRITICAL: Cannot pull prompts_bare.json from R2.")
+        print("  Check: CLOUDFLARE_API_TOKEN is set and has R2 read access to bucket 'qnfo'.")
+        return False
+    
+    with open(local, encoding='utf-8') as f:
+        all_entries = json.load(f)
+    
+    agent_names = {'PROJECTS-AGENT', 'PROMPTS-AGENT', 'QWAV-AGENT',
+                   'EXPLORER-SUBAGENT', 'IMPLEMENTER-SUBAGENT', 'REVIEWER-SUBAGENT'}
+    templates = [e for e in all_entries if e.get('name', '') not in agent_names]
+    system_prompts = [e for e in all_entries if e.get('name', '') in agent_names]
+    
+    print(f"  Source: {len(all_entries)} total entries")
+    print(f"  Templates: {len(templates)}, System prompts: {len(system_prompts)}")
+    
+    if dry_run:
+        print("\n  [DRY RUN] Would restore to:")
+        print(f"    {DEEPCHAT_DIR / 'custom_prompts.json'}")
+        print(f"    {DEEPCHAT_DIR / 'system_prompts.json'}")
+    else:
+        for fname, data in [('custom_prompts.json', templates), 
+                            ('system_prompts.json', system_prompts)]:
+            target = DEEPCHAT_DIR / fname
+            if target.exists():
+                backup_existing(target)
+            with open(target, 'w', encoding='utf-8') as f:
+                json.dump({"prompts": data}, f, indent=2, ensure_ascii=False)
+            print(f"  RESTORED: {fname} ({len(data)} entries)")
+    
+    local.unlink(missing_ok=True)
+    return True
+
+# === RESTORE CONFIGS ===
+CONFIG_MAP = {
+    "model-config.json": "qnfo/deepchat/backup/model-config.json",
+    "mcp-settings.json": "qnfo/deepchat/backup/mcp-settings.json",
+    "acp_agents.json": "qnfo/deepchat/backup/acp_agents.json",
+    "knowledge-configs.json": "qnfo/deepchat/backup/knowledge-configs.json",
+}
+
+def restore_configs(dry_run=False):
+    """Restore DeepChat configuration files from R2 backups."""
+    print("\n" + "=" * 60)
+    print("RESTORE: Configuration Files")
+    print("=" * 60)
+    
+    results = {}
+    for fname, r2_path in CONFIG_MAP.items():
+        local_tmp = Path(f"_tmp_{fname}")
+        target = DEEPCHAT_DIR / fname
+        
+        if not r2_pull(r2_path, str(local_tmp), f"Pull {fname} backup"):
+            print(f"  WARN: {fname} — not available on R2 (will skip)")
+            results[fname] = "SKIPPED (not on R2)"
+            continue
+        
+        with open(local_tmp, encoding='utf-8') as f:
+            data = json.load(f)
+        
+        if dry_run:
+            print(f"  [DRY RUN] Would restore {fname} ({len(json.dumps(data))} bytes)")
+            results[fname] = "WOULD_RESTORE"
+        else:
+            if target.exists():
+                backup_existing(target)
+            with open(target, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            print(f"  RESTORED: {fname}")
+            results[fname] = "RESTORED"
+        
+        local_tmp.unlink(missing_ok=True)
+    
+    return results
+
+# === RESTORE SKILLS ===
+SKILL_MANIFEST = [
+    "bling-usability-audit", "closeout-manager", "cloudflare-deployer",
+    "email-composer", "git-hygiene", "kaizen-autonomous-update",
+    "knowledge-graph", "local-to-r2-migration", "pdf-builder",
+    "prompt-audit", "publication-publisher", "template-catalog",
+]
+
+def restore_skills(dry_run=False):
+    """Restore skills from R2 to DeepChat skills directory."""
+    print("\n" + "=" * 60)
+    print("RESTORE: Skills")
+    print("=" * 60)
+    
+    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    results = {}
+    
+    for skill_name in SKILL_MANIFEST:
+        local_tmp = Path(f"_tmp_skill_{skill_name}.md")
+        r2_path = f"prompts/skills/{skill_name}/SKILL.md"
+        
+        if not r2_pull(r2_path, str(local_tmp), f"Pull {skill_name} skill"):
+            print(f"  WARN: {skill_name} — SKILL.md not found on R2")
+            results[skill_name] = "NOT ON R2"
+            continue
+        
+        target_dir = SKILLS_DIR / skill_name
+        target_file = target_dir / "SKILL.md"
+        
+        with open(local_tmp, encoding='utf-8') as f:
+            content = f.read()
+        
+        if dry_run:
+            print(f"  [DRY RUN] Would deploy {skill_name} ({len(content)} bytes)")
+            results[skill_name] = "WOULD_DEPLOY"
+        else:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            with open(target_file, 'w', encoding='utf-8') as f:
+                f.write(content)
+            print(f"  DEPLOYED: {skill_name} ({len(content)} bytes)")
+            results[skill_name] = "DEPLOYED"
+        
+        local_tmp.unlink(missing_ok=True)
+    
+    return results
+
+# === MAIN ===
+def main():
+    parser = argparse.ArgumentParser(
+        description="DeepChat Quickstart — Full R2 Recovery (v2.0)"
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be restored")
+    parser.add_argument("--prompts-only", action="store_true", help="Only restore prompts")
+    parser.add_argument("--configs-only", action="store_true", help="Only restore configs")
+    parser.add_argument("--skills-only", action="store_true", help="Only restore skills")
+    parser.add_argument("--backup-now", action="store_true", 
+                       help="Backup current DeepChat settings to R2 (save state)")
+    args = parser.parse_args()
+    
+    do_all = not (args.prompts_only or args.configs_only or args.skills_only)
+    
+    print("=" * 60)
+    print("DEEPCHAT QUICKSTART v2.0 — R2 Recovery")
+    print("=" * 60)
+    print(f"Mode: {'DRY RUN' if args.dry_run else 'LIVE'} {'BACKUP NOW' if args.backup_now else ''}")
+    print(f"Canonical source: R2 bucket '{R2_BUCKET}'")
+    print(f"Target (prompts/configs): {DEEPCHAT_DIR}")
+    print(f"Target (skills): {SKILLS_DIR}")
+    
+    # --- Pre-flight check ---
+    ok, out = run("npx wrangler whoami", "Cloudflare auth check")
+    if not ok:
+        print("\n" + "!" * 60)
+        print("CLOUDFLARE AUTH FAILED!")
+        print("!" * 60)
+        print("Before running this script, set your Cloudflare API token:")
+        print("  setx CLOUDFLARE_API_TOKEN \"your-40-char-token\"")
+        print("Then restart your terminal and try again.")
+        print("\nTo create a token: https://dash.cloudflare.com/profile/api-tokens")
+        print("  → Create Token → Use template: 'Create Custom Token'")
+        print("  → Permissions: Account → Cloudflare R2 Storage → Read")
+        print("  → Account Resources: Include → quniverse")
+        sys.exit(1)
+    
+    print(f"Cloudflare auth: OK ({out.strip()[:100]})")
+    DEEPCHAT_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # --- Backup current state ---
+    if args.backup_now:
+        print("\n" + "=" * 60)
+        print("BACKUP: Saving current DeepChat state to R2")
+        print("=" * 60)
+        for fname, r2_path in CONFIG_MAP.items():
+            src = DEEPCHAT_DIR / fname
+            if src.exists():
+                if r2_upload(str(src), r2_path):
+                    print(f"  BACKED UP: {fname} -> {r2_path}")
+                else:
+                    print(f"  FAILED: {fname} (wrangler upload error)")
+            else:
+                print(f"  SKIP: {fname} (does not exist locally)")
+    
+    # --- Restore ---
+    if args.prompts_only or do_all:
+        restore_prompts(dry_run=args.dry_run)
+    
+    if args.configs_only or do_all:
+        restore_configs(dry_run=args.dry_run)
+    
+    if args.skills_only or do_all:
+        restore_skills(dry_run=args.dry_run)
+    
+    # --- Done ---
+    print("\n" + "=" * 60)
+    print("RESTORE COMPLETE")
+    print("=" * 60)
+    if not args.dry_run:
+        print("ACTION: Restart DeepChat for changes to take effect.")
+        print()
+        print("If this is a FRESH install, also configure:")
+        print("  1. DeepChat → Settings → Providers → Add DeepSeek API key")
+        print("  2. Restart DeepChat again after adding provider")
+
+
+if __name__ == '__main__':
+    main()
