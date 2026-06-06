@@ -1,0 +1,6 @@
+# Ignore ephemeral files
+_*.py
+_tmp_*
+__pycache__/
+*.pyc
+.DS_Store
