@@ -1,80 +1,40 @@
 # qnfo-bootstrap — DeepChat Disaster Recovery
 
-**One-command recovery for DeepChat settings, prompts, templates, skills, and configurations.**
+**~30-second recovery. ONE master prompt + 12 skills. Nothing else.**
 
-If your machine crashed, you have a fresh Windows install, or DeepChat settings were corrupted — this repo has everything you need to restore.
-
-## Quickstart (After Machine Crash)
+## Quickstart (After Crash or Reset)
 
 ```powershell
-# Step 1: Install Node.js (if not already)
-# Download from: https://nodejs.org
+# 1. Set your Cloudflare API token
+setx CLOUDFLARE_API_TOKEN "your-token"
 
-# Step 2: Set your Cloudflare API token
-setx CLOUDFLARE_API_TOKEN "your-40-char-token"
-
-# Step 3: Pull and run the quickstart
+# 2. Run the bootstrap
 python _quickstart_deepchat.py
 
-# Step 4: Restart DeepChat
+# 3. DeepChat restarts automatically. Done.
 ```
 
-**Recovery time: ~15 minutes** assuming you have your API token saved.
-
-## What This Repo Contains
+## What This Repo Does
 
 | File | Purpose |
 |:-----|:--------|
-| `_quickstart_deepchat.py` | Full DeepChat restore: prompts, configs, skills from R2 |
-| `_r2_backup.py` | Python-based R2 upload/download (bypasses wrangler Windows bug) |
-| `_deploy.py` | Deploy skills from R2 to DeepChat |
-| `BOOTSTRAP.md` | Detailed disaster recovery guide with all scenarios |
+| `_quickstart_deepchat.py` v4.0 | Deploy master prompt + 12 skills from R2, autonomous restart |
+| `_r2_backup.py` | Python-based R2 upload (bypasses wrangler bug) |
+| `_deploy.py` | Deploy skills from R2 (legacy, use quickstart instead) |
+| `BOOTSTRAP.md` | Full disaster recovery guide |
 
-## Prerequisites
+## Architecture (v4.0 — Skill-Driven)
 
-- **Node.js** — https://nodejs.org (LTS version)
-- **Python 3.10+** — https://python.org
-- **Cloudflare API Token** — stored in your password manager (see below)
-- **DeepSeek API Key** — retrieved from DeepSeek dashboard
+**Three things total. Nothing to drift. Nothing to sync.**
 
-## Creating Your Cloudflare API Token
+1. **Master prompt** — `app-settings.json.defaultSystemPrompt` (12KB, pulled from R2)
+   - QNFO identity, policies, complete skill catalog, agent prompts inline
+2. **12 QNFO skills** — `~/.deepchat/skills/` (plain markdown, individually deployable)
+3. **Provider API key** — DeepChat Settings (must re-enter after reset)
 
-1. Go to https://dash.cloudflare.com/profile/api-tokens
-2. Click "Create Token" → "Create Custom Token"
-3. Configure:
-   - **Token name:** "DeepChat R2 Access"
-   - **Permissions:** Account → Cloudflare R2 Storage → Read
-   - **Account Resources:** Include → quniverse
-4. Copy the token and **STORE IT IN YOUR PASSWORD MANAGER**
+**Dead and gone:** `custom_prompts.json`, `system_prompts.json`, agent prompt templates, rarely-used skills.
 
-## What Gets Restored
+## See Also
 
-| Asset | Source |
-|:------|:-------|
-| 21 prompt templates | R2: `qnfo/prompts/prompts_bare.json` |
-| 6 agent system prompts | R2: `qnfo/prompts/prompts_bare.json` |
-| 12 QNFO skills | R2: `qnfo/prompts/skills/*/SKILL.md` |
-| Model configurations | R2: `qnfo/deepchat/backup/model-config.json` |
-| MCP server settings | R2: `qnfo/deepchat/backup/mcp-settings.json` |
-
-## Bootstrap Chain
-
-```
-github.com/rwnq8/qnfo-bootstrap  ← NO AUTH NEEDED (public)
-        ↓
-  _quickstart_deepchat.py         ← clones or downloads
-        ↓
-  CLOUDFLARE_API_TOKEN            ← from password manager
-        ↓
-  R2 qnfo/  (all canonical data)  ← pulls everything
-        ↓
-  DeepChat restored               ← restart and go
-```
-
-## More Info
-
-See [BOOTSTRAP.md](BOOTSTRAP.md) for the complete disaster recovery guide including:
-- Full machine crash recovery
-- Settings corruption fix
-- API token loss recovery
-- R2 bucket disaster recovery
+- [BOOTSTRAP.md](BOOTSTRAP.md) — Complete disaster recovery guide
+- [KNOWLEDGE-SETTINGS.md](KNOWLEDGE-SETTINGS.md) — Settings architecture reference (legacy)

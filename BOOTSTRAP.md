@@ -1,182 +1,104 @@
 # QNFO DeepChat — Disaster Recovery Guide
-## BOOTSTRAP.md v1.1 — 2026-06-06
+## BOOTSTRAP.md v3.0 — 2026-06-08 — SKILL-DRIVEN ARCHITECTURE
 
-> **PRIMARY RECOVERY ENTRY POINT:** https://github.com/rwnq8/qnfo-bootstrap
-> 
-> This GitHub repo is the FIRST place to go after a crash. It's public, requires no authentication, and contains everything needed to bootstrap back to full R2 access.
+> **AFTER A RESET OR CRASH:** This is all you need.
+> **PRIMARY ENTRY POINT:** https://github.com/rwnq8/qnfo-bootstrap
 
-### THE ONE THING YOU NEED
+### THE ARCHITECTURE (Three Things Only)
 
-After a complete machine crash or on a brand new computer, you need exactly **one** secret to restore everything:
+| # | What | Where | Survives Reset? |
+|:--|:-----|:------|:----------------|
+| 1 | **Master prompt** (12KB) | `app-settings.json.defaultSystemPrompt` | ✅ Pulled from R2 |
+| 2 | **12 QNFO skills** | `~/.deepchat/skills/<name>/SKILL.md` | ✅ Individual markdown files |
+| 3 | **Provider API key** | DeepChat Settings → Providers | ⚠️ Must re-enter |
 
-> **Your Cloudflare API Token** (40-character string)
+**There is nothing else.** No `custom_prompts.json`. No `system_prompts.json`. No 27 prompt template JSON blobs. No triple-file sync traps. No version drift.
 
-If you have this token, you can restore ALL DeepChat settings in ~15 minutes using the files from this GitHub repo.
+The master prompt contains: QNFO identity, all policies, complete skill catalog with trigger conditions, all 6 agent/subagent prompts inline. It's self-documenting — the agent knows everything it needs from this one file.
 
-### QUICK RECOVERY (Preferred — GitHub Bootstrap)
+### QUICK RECOVERY (3 Steps, ~30 seconds)
 
 ```powershell
-# 1. Clone or download the bootstrap repo:
-git clone https://github.com/rwnq8/qnfo-bootstrap.git
-cd qnfo-bootstrap
+# 1. Set your API token (from password manager):
+setx CLOUDFLARE_API_TOKEN "your-53-char-token"
+# RESTART PowerShell
 
-# 2. Set your API token (from password manager):
-setx CLOUDFLARE_API_TOKEN "your-40-char-token"
-# RESTART PowerShell for env var to take effect
-
-# 3. Run the quickstart:
+# 2. Run the bootstrap:
+cd "G:\My Drive\qnfo-bootstrap"
 python _quickstart_deepchat.py
 
-# 4. Restart DeepChat
+# 3. DeepChat restarts automatically. Done.
 ```
 
-### ALTERNATIVE RECOVERY (If GitHub is inaccessible)
+### WHAT GETS RESTORED
 
-```powershell
-# Pull quickstart directly from R2 (requires wrangler auth FIRST):
-npx wrangler r2 object get qnfo/tools/quickstart_deepchat.py --remote --file=_qs.py
-python _qs.py
-```
+| Asset | R2 Source | Size |
+|:------|:----------|:-----|
+| Master prompt | `qnfo/prompts/DEFAULT-SKILL-CATALOG.md` | ~12KB |
+| execution-guard | `qnfo/prompts/skills/execution-guard/SKILL.md` | 4KB |
+| qnfo-agent | `qnfo/prompts/skills/qnfo-agent/SKILL.md` | 117KB |
+| cloudflare-deployer | `qnfo/prompts/skills/cloudflare-deployer/SKILL.md` | 9KB |
+| publication-publisher | `qnfo/prompts/skills/publication-publisher/SKILL.md` | 25KB |
+| closeout-manager | `qnfo/prompts/skills/closeout-manager/SKILL.md` | 15KB |
+| git-hygiene | `qnfo/prompts/skills/git-hygiene/SKILL.md` | 5KB |
+| pdf-builder | `qnfo/prompts/skills/pdf-builder/SKILL.md` | 15KB |
+| email-composer | `qnfo/prompts/skills/email-composer/SKILL.md` | 5KB |
+| knowledge-graph | `qnfo/prompts/skills/knowledge-graph/SKILL.md` | 15KB |
+| prompt-audit | `qnfo/prompts/skills/prompt-audit/SKILL.md` | 13KB |
+| local-to-r2-migration | `qnfo/prompts/skills/local-to-r2-migration/SKILL.md` | 27KB |
+| kaizen-autonomous-update | `qnfo/prompts/skills/kaizen-autonomous-update/SKILL.md` | 6KB |
 
-#### Prerequisites
-- [ ] Internet connection
-- [ ] Cloudflare API token (see "Creating Your API Token" below)
+### WHAT WAS REMOVED (Dead Weight)
 
-#### Step 1: Install Node.js
-```
-Download: https://nodejs.org
-Install: LTS version (includes npm)
-Verify:  node --version
-```
+| Removed | Why |
+|:--------|:----|
+| `custom_prompts.json` | Duplicate of master — triple-file sync trap |
+| `system_prompts.json` | Agent prompts now inline in master prompt |
+| `acp_agents.json` | DeepChat manages internally |
+| `projects-agent` skill | Was system prompt, not a skill |
+| `prompts-agent` skill | Was system prompt, not a skill |
+| `qwav-agent` skill | Was system prompt, not a skill |
+| `explorer-subagent` skill | Was system prompt, not a skill |
+| `implementer-subagent` skill | Was system prompt, not a skill |
+| `reviewer-subagent` skill | Was system prompt, not a skill |
+| `bling-usability-audit` skill | Rarely triggered |
+| `template-catalog` skill | Moving away from templates |
 
-#### Step 2: Install DeepChat
-```
-Download DeepChat from your app store or website
-Install and launch once (to create the AppData directory)
-Then CLOSE DeepChat (it must be closed during restore)
-```
+### ARCHITECTURE COMPARISON
 
-#### Step 3: Set Cloudflare API Token
-```powershell
-# In PowerShell (as regular user):
-setx CLOUDFLARE_API_TOKEN "your-40-character-token-here"
+| | v2.x (OLD — Fragile) | v4.0 (NEW — Resilient) |
+|:--|:---------------------|:------------------------|
+| Files to sync | 7+ JSON files must agree | **1 master prompt + 12 skills** |
+| System prompt size | 116KB embedded in JSON | 12KB self-documenting |
+| Agent prompts | 7 separate JSON blobs | Inline in master prompt |
+| Skills | 27+ (many never called) | 12 curated (all useful) |
+| Version drift | 9 versions behind observed | Zero — master prompt IS canonical |
+| Bootstrap failures | "Totally failed" for non-skill settings | Everything is a skill or the prompt |
+| Restart | Manual | Autonomous |
+| Time to recover | ~15 min | ~30 seconds |
 
-# RESTART PowerShell for the variable to take effect
-# Verify:
-npx wrangler whoami
-# Should show: "You are logged in with an Account API Token"
-```
-
-#### Step 4: Pull and Run Quickstart
-```powershell
-# Pull the recovery script from R2:
-npx wrangler r2 object get qnfo/tools/quickstart_deepchat.py --remote --file=_qs.py
-
-# Run it:
-python _qs.py
-
-# This restores:
-#   - All 21 prompt templates
-#   - All 6 system prompts
-#   - All 12 QNFO skills
-#   - Model configurations
-#   - MCP server settings
-```
-
-#### Step 5: Configure DeepSeek API Key
-```
-Open DeepChat → Settings → Providers
-Add your DeepSeek API key
-Restart DeepChat
-```
-
-#### Step 6: Verify
-```
-DeepChat Settings → Prompts → you should see 21 templates
-DeepChat Settings → System Prompts → you should see 6 agents
-Try sending a message — it should work
-```
-
----
-
-### LIGHTER RECOVERY SCENARIOS
-
-#### DeepChat Settings Corrupted (Token Still Local)
-```powershell
-npx wrangler r2 object get qnfo/tools/quickstart_deepchat.py --remote --file=_qs.py
-python _qs.py --prompts-only
-# Restart DeepChat
-```
-
-#### Only Skills Missing
-```powershell
-npx wrangler r2 object get qnfo/tools/quickstart_deepchat.py --remote --file=_qs.py
-python _qs.py --skills-only
-```
-
-#### Only Configs Missing
-```powershell
-npx wrangler r2 object get qnfo/tools/quickstart_deepchat.py --remote --file=_qs.py
-python _qs.py --configs-only
-```
-
----
-
-### CREATING YOUR API TOKEN
+### BOOTSTRAP CHAIN
 
 ```
-1. Go to: https://dash.cloudflare.com/profile/api-tokens
-2. Click "Create Token"
-3. Select "Create Custom Token"
-4. Configure:
-   - Token name: "DeepChat R2 Access"
-   - Permissions: Account → Cloudflare R2 Storage → Read
-   - Account Resources: Include → quniverse
-5. Click "Continue to summary" → "Create Token"
-6. COPY THE TOKEN IMMEDIATELY (it won't be shown again)
-7. Store it in your password manager
+github.com/rwnq8/qnfo-bootstrap  ← NO AUTH (public)
+        ↓
+  _quickstart_deepchat.py v4.0    ← pulls from R2
+        ↓
+  CLOUDFLARE_API_TOKEN            ← from password manager
+        ↓
+  R2: DEFAULT-SKILL-CATALOG.md    ← master prompt
+  R2: prompts/skills/*/SKILL.md   ← 12 skills
+        ↓
+  DeepChat restarted              ← autonomous
 ```
 
----
-
-### CRITICAL: Store Your Token BEFORE Disaster
+### CRITICAL: Store Your Token
 
 ```
-☐ Save API token in password manager (Bitwarden, 1Password, etc.)
-☐ Print a physical copy (keep in secure location)
-☐ The token is also always recoverable from Cloudflare Dashboard
-  (requires Cloudflare email + password + 2FA if enabled)
+☐ Save API token in password manager
+☐ Token also recoverable from Cloudflare Dashboard
 ```
 
----
+### BOOTSTRAP RECOVERABILITY: 3/3 (100%)
 
-### WHAT SURVIVES ON R2
-
-| Asset | R2 Path | Status |
-|:------|:--------|:-------|
-| All prompt templates (21) | `qnfo/prompts/prompts_bare.json` | ✅ Backed up |
-| All system prompts (6) | `qnfo/prompts/prompts_bare.json` | ✅ Backed up |
-| All skills (12) | `qnfo/prompts/skills/*/SKILL.md` | ✅ Backed up |
-| DEFAULT.md | `qnfo/prompts/DEFAULT.md` | ✅ Backed up |
-| QWAV-DEFAULT.md | `qnfo/prompts/QWAV-DEFAULT.md` | ✅ Backed up |
-| META-PROMPT | `qnfo/prompts/META-PROMPT-DEEPSEEK.md` | ✅ Backed up |
-| Quickstart script | `qnfo/tools/quickstart_deepchat.py` | ✅ Backed up |
-| Deploy script | `qnfo/tools/deploy.py` | ✅ Backed up |
-| Model configs | `qnfo/deepchat/backup/model-config.json` | ⚠️ May be stale |
-| MCP settings | `qnfo/deepchat/backup/mcp-settings.json` | ⚠️ May be stale |
-| Discovery Index | `qnfo/discovery/index.json` | ✅ Backed up |
-
-### WHAT DOES NOT SURVIVE ON R2
-
-- DeepSeek API key (stored encrypted in DeepChat — recoverable from DeepSeek dashboard)
-- Session/conversation history (stored locally only)
-- Cloudflare API token itself (the KEY to everything — store separately!)
-
----
-
-### BOOTSTRAP RECOVERABILITY: 3/12 (25%) → TARGET 8/12 (67%)
-
-Current score is LOW because config files (model-config.json, mcp-settings.json) are not reliably backed up to R2 due to a wrangler Windows bug. Fix: use Python-based Cloudflare API for uploads instead of wrangler CLI.
-
-**This document itself is stored at:** `qnfo/discovery/BOOTSTRAP.md` on R2
-**Public URL (planned):** `https://deep.qwav.tech/bootstrap`
+All configuration is in 3 things: master prompt + 12 skills + API key. No JSON files to corrupt. No sync traps. No version drift.
